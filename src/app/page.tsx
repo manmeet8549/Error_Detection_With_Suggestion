@@ -171,10 +171,10 @@ entries = process_logs('./logs')
 report = generate_report(entries)`;
 
 // ===== Utility =====
-let fileIdCounter = 0;
-function createFile(name: string, content: string): FileItem {
+let fileIdCounter = 100; // start high to avoid collisions with static IDs
+function createFile(name: string, content: string, id?: string): FileItem {
   fileIdCounter++;
-  return { id: `file-${fileIdCounter}`, name, content, analysis: null };
+  return { id: id || `file-${fileIdCounter}`, name, content, analysis: null };
 }
 
 // ===== Syntax Highlighting =====
@@ -289,9 +289,9 @@ function LineNumbers({ lineCount, errorLines, selectedLine, onSelectLine }: {
 export default function ErrorDetector() {
   // File management state
   const [files, setFiles] = useState<FileItem[]>([
-    createFile("statistics.py", SAMPLE_CODE_1),
-    createFile("data_processor.py", SAMPLE_CODE_2),
-    createFile("log_analyzer.py", SAMPLE_CODE_3),
+    createFile("statistics.py", SAMPLE_CODE_1, "file-1"),
+    createFile("data_processor.py", SAMPLE_CODE_2, "file-2"),
+    createFile("log_analyzer.py", SAMPLE_CODE_3, "file-3"),
   ]);
   const [activeFileId, setActiveFileId] = useState<string>("file-1");
   const [showSidebar, setShowSidebar] = useState(true);
@@ -511,11 +511,6 @@ export default function ErrorDetector() {
 
       {/* ===== Title Bar ===== */}
       <div className="flex items-center h-[38px] flex-shrink-0 px-3 border-b" style={{ background: "#323233", borderColor: "#252526" }}>
-        <div className="flex items-center gap-2 mr-4">
-          <div className="w-3 h-3 rounded-full" style={{ background: "#ff5f57" }} />
-          <div className="w-3 h-3 rounded-full" style={{ background: "#febc2e" }} />
-          <div className="w-3 h-3 rounded-full" style={{ background: "#28c840" }} />
-        </div>
         <div className="flex items-center gap-2 flex-1 justify-center">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#58a6ff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M12 2L2 7l10 5 10-5-10-5z" /><path d="M2 17l10 5 10-5" /><path d="M2 12l10 5 10-5" />
