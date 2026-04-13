@@ -179,43 +179,68 @@ function createFile(name: string, content: string, id?: string): FileItem {
 
 // ===== Syntax Highlighting =====
 function highlightPython(code: string): string {
-  let html = code
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-
-  html = html.replace(/(#[^\n]*)/g, '<span class="tok-comment">$1</span>');
-  html = html.replace(/("""[\s\S]*?"""|'''[\s\S]*?''')/g, '<span class="tok-string">$1</span>');
-  html = html.replace(/(f?"[^"]*"|f?'[^']*')/g, '<span class="tok-string">$1</span>');
-
-  const keywords = [
-    "import","from","def","class","return","if","elif","else","for","while",
-    "try","except","finally","with","as","raise","pass","break","continue",
-    "in","not","and","or","is","lambda","yield","global","nonlocal","assert","del",
-    "True","False","None",
+  if (!code) return "";
+  
+  // Define highlighting rules
+  const rules = [
+    { regex: /(#[^\n]*)/g, cls: "tok-comment" },
+    { regex: /(""[\s\S]*?"""|'''[\s\S]*?'''|f?"[^"]*"|f?'[^']*'|"[^"]*"|'[^']*')/g, cls: "tok-string" },
+    { regex: /\b(import|from|def|class|return|if|elif|else|for|while|try|except|finally|with|as|raise|pass|break|continue|in|not|and|or|is|lambda|yield|global|nonlocal|assert|del|True|False|None)\b/g, cls: "tok-keyword" },
+    { regex: /\b(print|len|range|int|float|str|list|dict|set|abs|max|min|sum|open|type|input|enumerate|zip|map|filter|isinstance|super)\b(?=\()/g, cls: "tok-builtin" },
+    { regex: /\b(\d+\.?\d*)\b/g, cls: "tok-number" },
+    { regex: /(@\w+)/g, cls: "tok-decorator" },
+    { regex: /(?:def\s+|class\s+)(\w+)/g, cls: "tok-funcname", group: 1 }
   ];
-  keywords.forEach((kw) => {
-    const regex = new RegExp(`\\b(${kw})\\b`, "g");
-    html = html.replace(regex, '<span class="tok-keyword">$1</span>');
+
+  // Find all matches
+  let matches: { start: number, end: number, cls: string, text: string }[] = [];
+  
+  rules.forEach(rule => {
+    let match;
+    rule.regex.lastIndex = 0;
+    while ((match = rule.regex.exec(code)) !== null) {
+      const text = rule.group !== undefined ? match[rule.group] : match[0];
+      const start = rule.group !== undefined ? match.index + match[0].indexOf(text) : match.index;
+      matches.push({
+        start,
+        end: start + text.length,
+        cls: rule.cls,
+        text
+      });
+    }
   });
 
-  const builtins = [
-    "print","len","range","int","float","str","list","dict","set","tuple",
-    "type","input","open","abs","max","min","sum","sorted","enumerate",
-    "zip","map","filter","isinstance","super",
-  ];
-  builtins.forEach((fn) => {
-    const regex = new RegExp(`\\b(${fn})(?=\\()`, "g");
-    html = html.replace(regex, '<span class="tok-builtin">$1</span>');
+  // Sort matches and remove overlaps
+  matches.sort((a, b) => a.start - b.start || (b.end - b.start) - (a.end - a.start));
+  
+  const filteredMatches: typeof matches = [];
+  let lastEnd = 0;
+  matches.forEach(m => {
+    if (m.start >= lastEnd) {
+      filteredMatches.push(m);
+      lastEnd = m.end;
+    }
   });
 
-  html = html.replace(/\b(\d+\.?\d*)\b/g, '<span class="tok-number">$1</span>');
-  html = html.replace(/(<span class="tok-keyword">def<\/span>\s+)(\w+)/g, "$1<span class=\"tok-funcname\">$2</span>");
-  html = html.replace(/(<span class="tok-keyword">class<\/span>\s+)(\w+)/g, "$1<span class=\"tok-funcname\">$2</span>");
-  html = html.replace(/(\w+)(?=\s*\()/g, '<span class="tok-call">$1</span>');
-  html = html.replace(/(@\w+)/g, '<span class="tok-decorator">$1</span>');
+  // Build the HTML
+  let result = "";
+  let lastIdx = 0;
+  filteredMatches.forEach(m => {
+    // Add raw text before match
+    result += code.substring(lastIdx, m.start)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    
+    // Add highlighted match
+    const escapedText = m.text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    result += `<span class="${m.cls}">${escapedText}</span>`;
+    lastIdx = m.end;
+  });
+  
+  // Add remaining text
+  result += code.substring(lastIdx)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-  return html;
+  return result;
 }
 
 // ===== Severity Components =====
@@ -269,7 +294,7 @@ function LineNumbers({ lineCount, errorLines, selectedLine, onSelectLine }: {
   lineCount: number; errorLines: Set<number>; selectedLine: number | null; onSelectLine: (line: number) => void;
 }) {
   return (
-    <div className="select-none flex-shrink-0 w-[55px] text-right pr-3 pt-1 pb-1 border-r border-[#30363d]">
+    <div className="select-none flex-shrink-0 w-[55px] text-right pr-3 border-r border-[#30363d]" style={{ paddingTop: "12px", paddingBottom: "12px" }}>
       {Array.from({ length: lineCount }, (_, i) => {
         const lineNum = i + 1;
         const hasError = errorLines.has(lineNum);
@@ -296,7 +321,9 @@ export default function ErrorDetector() {
   const [activeFileId, setActiveFileId] = useState<string>("file-1");
   const [showSidebar, setShowSidebar] = useState(true);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [selectedLine, setSelectedLine] = useState<number | null>(null);
+  const [cursorPos, setCursorPos] = useState({ line: 1, col: 1 });
   const [copySuccess, setCopySuccess] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -327,6 +354,17 @@ export default function ErrorDetector() {
     return files.reduce((acc, f) => acc + (f.analysis?.summary.totalIssues || 0), 0);
   }, [files]);
 
+  const indentationSize = useMemo(() => {
+    const lines = code.split("\n");
+    for (const line of lines) {
+      const match = line.match(/^( +)[^ ]/);
+      if (match && match[1].length > 0 && match[1].length % 2 === 0) {
+        return match[1].length;
+      }
+    }
+    return 4;
+  }, [code]);
+
   // ===== File Actions =====
   const addNewFile = useCallback(() => {
     const name = `untitled_${files.length + 1}.py`;
@@ -356,11 +394,21 @@ export default function ErrorDetector() {
     setSelectedLine(null);
   }, []);
 
-  const updateFileContent = useCallback((id: string, content: string) => {
+  const updateFileContent = useCallback((id: string, content: string, selectionStart?: number) => {
+    // Raw content only - no more sanitizers needed with the one-pass highlighter
     setFiles((prev) =>
       prev.map((f) => (f.id === id ? { ...f, content, analysis: null } : f))
     );
     setSelectedLine(null);
+    setAnalysisError(null);
+
+    if (selectionStart !== undefined) {
+      const textBefore = content.substring(0, selectionStart);
+      const linesArr = textBefore.split("\n");
+      const line = linesArr.length;
+      const col = linesArr[linesArr.length - 1].length + 1;
+      setCursorPos({ line, col });
+    }
   }, []);
 
   const startRename = useCallback((id: string) => {
@@ -406,6 +454,7 @@ export default function ErrorDetector() {
   const handleAnalyze = useCallback(async () => {
     if (!code.trim()) return;
     setIsAnalyzing(true);
+    setAnalysisError(null);
     setSelectedLine(null);
     try {
       const res = await fetch("/api/analyze", {
@@ -418,9 +467,12 @@ export default function ErrorDetector() {
         setFiles((prev) =>
           prev.map((f) => (f.id === activeFileId ? { ...f, analysis: data.analysis } : f))
         );
+      } else {
+        setAnalysisError(data.error || "Failed to analyze code. Please check your AI configuration.");
       }
     } catch (err) {
       console.error("Analysis failed:", err);
+      setAnalysisError("An unexpected error occurred during analysis.");
     } finally {
       setIsAnalyzing(false);
     }
@@ -472,6 +524,36 @@ export default function ErrorDetector() {
 
   const handleClear = useCallback(() => {
     updateFileContent(activeFileId, "");
+  }, [activeFileId, updateFileContent]);
+
+  const updateCursorPosition = useCallback((e: React.SyntheticEvent<HTMLTextAreaElement>) => {
+    const target = e.currentTarget;
+    const start = target.selectionStart;
+    const textBefore = target.value.substring(0, start);
+    const lines = textBefore.split("\n");
+    const line = lines.length;
+    const col = lines[lines.length - 1].length + 1;
+    setCursorPos({ line, col });
+  }, []);
+
+  const handleEditorKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Tab") {
+      e.preventDefault();
+      const target = e.currentTarget;
+      const start = target.selectionStart;
+      const end = target.selectionEnd;
+      const val = target.value;
+
+      const newVal = val.substring(0, start) + "    " + val.substring(end);
+      updateFileContent(activeFileId, newVal);
+
+      // Restore cursor position in next tick
+      setTimeout(() => {
+        if (textareaRef.current) {
+          textareaRef.current.selectionStart = textareaRef.current.selectionEnd = start + 4;
+        }
+      }, 0);
+    }
   }, [activeFileId, updateFileContent]);
 
   // ===== Status Helpers =====
@@ -861,25 +943,32 @@ export default function ErrorDetector() {
           </div>
 
           {/* Code Editor */}
-          <div className="flex-1 overflow-auto relative" style={{ fontFamily: "'Geist Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace" }}>
+          <div className="flex-1 overflow-auto relative editor-container" style={{ fontFamily: "'Geist Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace" }}>
             <div className="flex min-h-full relative">
               <LineNumbers lineCount={lineCount} errorLines={errorLines} selectedLine={selectedLine} onSelectLine={handleSelectLine} />
               <div className="flex-1 relative overflow-hidden">
                 <pre
                   ref={overlayRef}
-                  className="absolute inset-0 p-1 pointer-events-none overflow-hidden text-[13px] leading-[22px]"
-                  style={{ whiteSpace: "pre", tabSize: 4, caretColor: "#aeafad" }}
+                  className="absolute inset-0 pointer-events-none overflow-hidden editor-layer"
+                  style={{ whiteSpace: "pre", tabSize: 4 }}
                   aria-hidden="true"
                   dangerouslySetInnerHTML={{ __html: highlightPython(code) + "\n" }}
                 />
                 <textarea
                   ref={textareaRef}
                   value={code}
-                  onChange={(e) => updateFileContent(activeFileId, e.target.value)}
+                  onKeyDown={handleEditorKeyDown}
+                  onChange={(e) => updateFileContent(activeFileId, e.target.value, e.target.selectionStart)}
                   onScroll={handleScroll}
+                  onClick={updateCursorPosition}
+                  onKeyUp={updateCursorPosition}
+                  onMouseUp={updateCursorPosition}
                   spellCheck={false}
-                  className="absolute inset-0 w-full h-full p-1 resize-none text-[13px] leading-[22px] outline-none"
-                  style={{ background: "transparent", color: "transparent", caretColor: "#aeafad", fontFamily: "inherit", tabSize: 4 }}
+                  autoCapitalize="off"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  className="absolute inset-0 w-full h-full resize-none outline-none editor-layer editor-textarea"
+                  style={{ tabSize: 4 }}
                   placeholder="Paste or type your Python code here..."
                 />
               </div>
@@ -890,7 +979,7 @@ export default function ErrorDetector() {
         {/* ===== Right Panel - Problems ===== */}
         <motion.div
           initial={{ width: 0, opacity: 0 }}
-          animate={{ width: analysis || isAnalyzing ? 420 : 0, opacity: analysis || isAnalyzing ? 1 : 0 }}
+          animate={{ width: analysis || isAnalyzing || analysisError ? 420 : 0, opacity: analysis || isAnalyzing || analysisError ? 1 : 0 }}
           transition={{ duration: 0.3, ease: "easeInOut" }}
           className="flex-shrink-0 overflow-hidden border-l flex flex-col"
           style={{ background: "#252526", borderColor: "#181818" }}
@@ -928,7 +1017,26 @@ export default function ErrorDetector() {
               </div>
             )}
 
-            {!isAnalyzing && analysis && (
+            {analysisError && (
+              <div className="flex flex-col items-center justify-center h-full p-6 text-center">
+                <div className="w-16 h-16 rounded-full bg-[#f8514915] flex items-center justify-center mb-4 border border-[#f8514930]">
+                  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#f85149" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
+                  </svg>
+                </div>
+                <h3 className="text-[15px] font-semibold mb-2" style={{ color: "#f85149" }}>Analysis Failed</h3>
+                <p className="text-[12px]" style={{ color: "#cccccc" }}>{analysisError}</p>
+                <button 
+                  onClick={handleAnalyze}
+                  className="mt-6 px-4 py-2 rounded-md text-[12px] font-medium transition-colors"
+                  style={{ background: "#f8514920", color: "#f85149", border: "1px solid #f8514940" }}
+                >
+                  Try Again
+                </button>
+              </div>
+            )}
+
+            {!isAnalyzing && !analysisError && analysis && (
               <div className="p-3">
                 {/* Summary Card */}
                 <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
@@ -1055,8 +1163,8 @@ export default function ErrorDetector() {
           </span>
         </div>
         <div className="flex items-center gap-4">
-          <span>Ln {selectedLine || 1}, Col 1</span>
-          <span>Spaces: 4</span>
+          <span>Ln {cursorPos.line}, Col {cursorPos.col}</span>
+          <span>Spaces: {indentationSize}</span>
           <span>UTF-8</span>
           <span className="flex items-center gap-1">Python</span>
           <span>PyLint AI</span>

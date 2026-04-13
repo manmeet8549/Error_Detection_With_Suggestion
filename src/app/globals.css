@@ -65,6 +65,40 @@ textarea::-webkit-scrollbar-thumb {
   color: #dcdcaa;
 }
 
+/* ===== Editor Alignment & Normalization ===== */
+.editor-container {
+  overflow: auto !important;
+}
+
+.editor-layer {
+  font-family: 'Geist Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace !important;
+  font-size: 13px !important;
+  line-height: 22px !important;
+  padding: 12px 14px !important;
+  border: none !important;
+  margin: 0 !important;
+  box-sizing: border-box !important;
+  letter-spacing: normal !important;
+  tab-size: 4 !important;
+  -moz-tab-size: 4 !important;
+}
+
+.editor-textarea {
+  background: transparent !important;
+  color: transparent !important;
+  caret-color: #aeafad !important;
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+  resize: none !important;
+}
+
+.editor-textarea::selection {
+  background: rgba(88, 166, 255, 0.3) !important;
+}
+
+
 /* ===== Animations ===== */
 @keyframes shimmer {
   0% { background-position: -200% 0; }

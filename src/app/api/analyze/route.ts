@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import ZAI from "z-ai-web-dev-sdk";
+import { spawn } from "child_process";
+import path from "path";
 
 export async function POST(req: NextRequest) {
   try {
@@ -13,109 +15,83 @@ export async function POST(req: NextRequest) {
     }
 
     const lang = language || "python";
-    const zai = await ZAI.create();
-
     const systemPrompt = `You are an expert code analyzer and debugging assistant. Analyze the given ${lang} code thoroughly for errors, bugs, potential issues, and code quality improvements.
+    
+    Respond ONLY with valid JSON (no markdown).`;
 
-Your task is to detect and categorize issues into:
-1. **Critical Errors** - Syntax errors, runtime errors, logic errors that would break the code
-2. **Warnings** - Code that may cause issues, deprecated patterns, potential bugs
-3. **Suggestions** - Best practices, performance improvements, style improvements
+    const userPrompt = `Analyze this ${lang} code:\n\n\`\`\`${lang}\n${code}\n\`\`\``;
 
-For EACH issue found, provide:
-- The exact line number (1-indexed)
-- The column/position if applicable
-- Severity level: "error", "warning", or "info"
-- A clear, concise error message
-- The specific code snippet that has the issue
-- A suggested fix or correction
-
-IMPORTANT RULES:
-- Be thorough - check for ALL types of errors including: syntax, runtime, logic, type mismatches, undefined variables, missing imports, incorrect function signatures, improper loops, edge cases, null/None handling, incorrect operators, etc.
-- Check variable scope issues, unused imports, shadowing
-- Check for common ${lang} pitfalls
-- If the code looks clean, still mention at least 2-3 style/performance suggestions
-- Format the line numbers accurately by counting from the FIRST line of the code
-- DO NOT miss any errors - be extremely thorough
-
-Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
-{
-  "summary": {
-    "totalIssues": number,
-    "errors": number,
-    "warnings": number,
-    "suggestions": number,
-    "overallStatus": "has_errors" | "has_warnings" | "clean"
-  },
-  "issues": [
-    {
-      "line": number,
-      "column": number,
-      "severity": "error" | "warning" | "info",
-      "message": "Clear description of the issue",
-      "code": "The problematic code snippet",
-      "suggestion": "How to fix it"
-    }
-  ]
-}`;
-
-    const userPrompt = `Analyze this ${lang} code for errors, warnings, and suggestions:\n\n\`\`\`${lang}\n${code}\n\`\`\``;
-
-    const completion = await zai.chat.completions.create({
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
-      temperature: 0.1,
-    });
-
-    let responseContent = completion.choices[0]?.message?.content || "";
-
-    // Clean up the response - remove markdown code fences if present
-    responseContent = responseContent.trim();
-    if (responseContent.startsWith("```json")) {
-      responseContent = responseContent.slice(7);
-    }
-    if (responseContent.startsWith("```")) {
-      responseContent = responseContent.slice(3);
-    }
-    if (responseContent.endsWith("```")) {
-      responseContent = responseContent.slice(0, -3);
-    }
-    responseContent = responseContent.trim();
-
-    let analysis;
+    let responseContent = "";
     try {
-      analysis = JSON.parse(responseContent);
-    } catch {
-      // If parsing fails, try to extract JSON from the response
-      const jsonMatch = responseContent.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        analysis = JSON.parse(jsonMatch[0]);
-      } else {
-        // Fallback: create a basic structure from the text response
-        analysis = {
-          summary: {
-            totalIssues: 0,
-            errors: 0,
-            warnings: 0,
-            suggestions: 0,
-            overallStatus: "clean",
-          },
-          issues: [],
-          rawResponse: responseContent,
-        };
-      }
-    }
+      const zai = await ZAI.create();
+      const completion = await zai.chat.completions.create({
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        temperature: 0.1,
+      });
+      responseContent = completion.choices[0]?.message?.content || "";
+      
+      // Clean up and parse AI response
+      responseContent = responseContent.trim();
+      if (responseContent.startsWith("```json")) responseContent = responseContent.slice(7);
+      if (responseContent.startsWith("```")) responseContent = responseContent.slice(3);
+      if (responseContent.endsWith("```")) responseContent = responseContent.slice(0, -3);
+      responseContent = responseContent.trim();
+      
+      const analysis = JSON.parse(responseContent);
+      return NextResponse.json({ success: true, analysis });
 
-    return NextResponse.json({ success: true, analysis });
+    } catch (aiError: any) {
+      console.error("AI SDK Error, falling back to local analyzer:", aiError.message);
+      
+      // Fallback to local Python analyzer if code is python
+      if (lang.toLowerCase() === "python") {
+        return new Promise((resolve) => {
+          const analyzerPath = path.join(process.cwd(), "src", "lib", "analyzer.py");
+          const process_py = spawn("python", [analyzerPath]);
+
+          let output = "";
+          let errorOutput = "";
+
+          process_py.stdout.on("data", (data) => {
+            output += data.toString();
+          });
+
+          process_py.stderr.on("data", (data) => {
+            errorOutput += data.toString();
+          });
+
+          process_py.on("close", (code) => {
+            if (code === 0) {
+              try {
+                const analysis = JSON.parse(output);
+                resolve(NextResponse.json({ success: true, analysis }));
+              } catch (e) {
+                console.error("Failed to parse analyzer output:", e);
+                resolve(NextResponse.json({ success: false, error: "Analysis engine failure" }, { status: 500 }));
+              }
+            } else {
+              console.error("Python analyzer exited with code:", code, errorOutput);
+              resolve(NextResponse.json({ success: false, error: "Analysis engine error" }, { status: 500 }));
+            }
+          });
+
+          process_py.stdin.write(code);
+          process_py.stdin.end();
+        });
+      }
+
+      return NextResponse.json({ 
+        success: false, 
+        error: "AI SDK not configured and no local analyzer for " + lang
+      }, { status: 500 });
+    }
   } catch (error: any) {
     console.error("Analysis error:", error);
     return NextResponse.json(
-      {
-        success: false,
-        error: error.message || "Failed to analyze code",
-      },
+      { success: false, error: error.message || "Internal server error" },
       { status: 500 }
     );
   }
